@@ -1,7 +1,7 @@
 # Sambrs
 
-A tiny ergonomic wrapper around `WNetAddConnection2A` and
-`WNetCancelConnection2A`. The goal is to offer an easy to use interface to
+A tiny ergonomic wrapper around `WNetAddConnection2W` and
+`WNetCancelConnection2W`. The goal is to offer an easy to use interface to
 connect to SMB network shares on Windows.
 
 Sam -> SMB -> Rust -> Samba is taken!? -> sambrs

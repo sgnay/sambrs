@@ -1,6 +1,6 @@
 #![warn(clippy::pedantic)]
 
-//! A tiny ergonomic wrapper around `WNetAddConnection2A` and `WNetCancelConnection2A`. The goal is
+//! A tiny ergonomic wrapper around `WNetAddConnection2W` and `WNetCancelConnection2W`. The goal is
 //! to offer an easy to use interface to connect to SMB network shares on Windows.
 //!
 //! Sam -> SMB -> Rust -> Samba is taken!? -> sambrs
@@ -31,7 +31,9 @@
 mod error;
 
 pub use error::{Error, Result};
-use std::ffi::CString;
+// (Previously used CString for ANSI APIs; migration to Unicode uses wide strings.)
+use std::os::windows::ffi::OsStrExt;
+use std::ffi::OsStr;
 use tracing::{debug, error, trace};
 use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_ALREADY_ASSIGNED, ERROR_BAD_DEV_TYPE, ERROR_BAD_DEVICE,
@@ -82,7 +84,7 @@ impl SmbShare {
     ///   if `mount_on` is `None`
     /// - `interactive` will prompt the user for a password instead of failing with `Error::InvalidPassword`
     ///
-    /// # Some excerpts from the [Microsoft docs](https://learn.microsoft.com/en-us/windows/win32/api/winnetwk/nf-winnetwk-wnetaddconnection2a)
+    /// # Some excerpts from the [Microsoft docs](https://learn.microsoft.com/en-us/windows/win32/api/winnetwk/nf-winnetwk-wnetaddconnection2w)
     ///
     /// `persist` (`CONNECT_UPDATE_PROFILE`): The network resource connection should be remembered. If this bit
     /// flag is set, the operating system automatically attempts to restore the connection when the
@@ -105,14 +107,17 @@ impl SmbShare {
     /// # Errors
     /// This method will error if Windows is unable to connect to the SMB share.
     pub fn connect(&self, persist: bool, interactive: bool) -> Result<()> {
-        let local_name = self
+        let local_name_w: Option<Vec<u16>> = self
             .mount_on
             .map(|ln| format!("{ln}:"))
-            .map(CString::new)
-            .transpose()?;
+            .map(|s| {
+                let mut v: Vec<u16> = OsStr::new(&s).encode_wide().collect();
+                v.push(0);
+                v
+            });
 
-        let local_name = match local_name {
-            Some(ref cstring) => cstring.as_c_str().as_ptr().cast::<u8>().cast_mut(),
+        let local_name = match local_name_w {
+            Some(ref v) => v.as_ptr() as *mut u16,
             None => std::ptr::null_mut(),
         };
 
@@ -130,33 +135,37 @@ impl SmbShare {
 
         debug!("Connection flags: {flags:#?}");
 
-        let share = CString::new(&*self.share)?;
-        let username = CString::new(&*self.username)?;
-        let password = CString::new(&*self.password)?;
+        // Convert strings to wide (UTF-16) with NUL terminator
+        let mut share_w: Vec<u16> = OsStr::new(&*self.share).encode_wide().collect();
+        share_w.push(0);
+        let mut username_w: Vec<u16> = OsStr::new(&*self.username).encode_wide().collect();
+        username_w.push(0);
+        let mut password_w: Vec<u16> = OsStr::new(&*self.password).encode_wide().collect();
+        password_w.push(0);
 
-        // https://learn.microsoft.com/en-us/windows/win32/api/winnetwk/ns-winnetwk-netresourcea
-        let mut netresource = WNet::NETRESOURCEA {
-            dwDisplayType: 0, // ignored by WNetAddConnection2A
-            dwScope: 0,       // ignored by WNetAddConnection2A
+        // https://learn.microsoft.com/en-us/windows/win32/api/winnetwk/ns-winnetwk-netresourcew
+        let mut netresource = WNet::NETRESOURCEW {
+            dwDisplayType: 0, // ignored by WNetAddConnection2W
+            dwScope: 0,       // ignored by WNetAddConnection2W
             dwType: WNet::RESOURCETYPE_DISK,
-            dwUsage: 0, // ignored by WNetAddConnection2A
-            lpLocalName: local_name,
-            lpRemoteName: share.as_c_str().as_ptr().cast::<u8>().cast_mut(),
-            lpComment: std::ptr::null_mut(), // ignored by WNetAddConnection2A
+            dwUsage: 0, // ignored by WNetAddConnection2W
+            lpLocalName: local_name as *mut u16,
+            lpRemoteName: share_w.as_ptr() as *mut u16,
+            lpComment: std::ptr::null_mut(), // ignored by WNetAddConnection2W
             lpProvider: std::ptr::null_mut(), // Microsoft docs: You should set this member only if you know the network provider you want to use.
-                                              // Otherwise, let the operating system determine which provider the network name maps to.
+                                               // Otherwise, let the operating system determine which provider the network name maps to.
         };
 
         trace!("Trying to connect to {}", self.share);
 
-        // https://learn.microsoft.com/en-us/windows/win32/api/winnetwk/nf-winnetwk-wnetaddconnection2a
+        // https://learn.microsoft.com/en-us/windows/win32/api/winnetwk/nf-winnetwk-wnetaddconnection2w
         let connection_result = unsafe {
-            let username = username.as_ref().as_ptr();
-            let password = password.as_ref().as_ptr();
-            WNet::WNetAddConnection2A(
-                std::ptr::from_mut::<WNet::NETRESOURCEA>(&mut netresource),
-                password.cast::<u8>(),
-                username.cast::<u8>(),
+            let username = username_w.as_ptr();
+            let password = password_w.as_ptr();
+            WNet::WNetAddConnection2W(
+                std::ptr::from_mut::<WNet::NETRESOURCEW>(&mut netresource),
+                password as *const u16,
+                username as *const u16,
                 flags,
             )
         };
@@ -211,13 +220,23 @@ impl SmbShare {
     /// # Errors
     /// This method will return an error if Windows is unable to disconnect from the smb share.
     pub fn disconnect(&self, persist: bool, force: bool) -> Result<()> {
-        let local_name = self
+        let local_name_w: Option<Vec<u16>> = self
             .mount_on
             .map(|ln| format!("{ln}:"))
-            .map(CString::new)
-            .transpose()?;
+            .map(|s| {
+                let mut v: Vec<u16> = OsStr::new(&s).encode_wide().collect();
+                v.push(0);
+                v
+            });
 
-        let resource_to_disconnect = local_name.unwrap_or(CString::new(&*self.share)?);
+        let resource_to_disconnect_w: Vec<u16> = match local_name_w {
+            Some(v) => v,
+            None => {
+                let mut v: Vec<u16> = OsStr::new(&*self.share).encode_wide().collect();
+                v.push(0);
+                v
+            }
+        };
 
         let force = if force { TRUE } else { FALSE };
 
@@ -228,7 +247,7 @@ impl SmbShare {
         };
 
         let disconnect_result = unsafe {
-            WNet::WNetCancelConnection2A(resource_to_disconnect.as_ptr() as *mut u8, persist, force)
+            WNet::WNetCancelConnection2W(resource_to_disconnect_w.as_ptr() as *mut u16, persist, force)
         };
 
         debug!("Disconnect result: {disconnect_result:#?}");
