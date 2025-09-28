@@ -1,4 +1,3 @@
-use std::ffi::NulError;
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -6,9 +5,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[allow(clippy::enum_variant_names)]
 #[derive(Error, Debug, PartialEq)]
 pub enum Error {
-    #[error("Failed to convert share to CString")]
-    CStringConversion(#[from] NulError),
-
     #[error("The caller does not have access to the network resource.")]
     AccessDenied,
     #[error(

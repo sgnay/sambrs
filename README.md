@@ -62,3 +62,28 @@ on accessing SMB shares with Rust on Windows. If you need a fully-featured
 remote file access solution that works across multiple protocols, you should
 definitely check out his project
 [remotefs](https://github.com/veeso/remotefs-rs).
+
+## Continuous Integration
+
+This repository includes a GitHub Actions workflow that runs on Windows (`windows-latest`) and performs:
+
+- `cargo fmt -- --check`
+- `cargo clippy -- -D warnings`
+- `cargo test --all`
+
+The workflow file is `.github/workflows/ci.yml`.
+
+## Tests
+
+Some tests in this crate require access to a real SMB share and therefore are marked with `#[ignore]` by default. To run all tests including ignored ones (only on Windows with a proper SMB environment), use:
+
+```powershell
+cargo test -- --ignored
+```
+
+Run only the fast unit tests (default) with:
+
+```powershell
+cargo test
+```
+
